@@ -96,8 +96,7 @@ class BluetoothCharacteristic {
   Future<List<int>> read({int timeout = 15}) async {
     // check connected
     if (device.isDisconnected) {
-      throw FlutterBluePlusException(
-          ErrorPlatform.fbp, "readCharacteristic", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
+      throw FlutterBluePlusException(ErrorPlatform.fbp, "readCharacteristic", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
     }
 
     // Only allow a single ble operation to be underway at a time
@@ -158,8 +157,7 @@ class BluetoothCharacteristic {
   ///         2. the peripheral device must support the 'long write' ble protocol.
   ///         3. Interrupted transfers can leave the characteristic in a partially written state
   ///         4. If the mtu is small, it is very very slow.
-  Future<void> write(List<int> value,
-      {bool withoutResponse = false, bool allowLongWrite = false, int timeout = 15}) async {
+  Future<void> write(List<int> value, {bool withoutResponse = false, bool allowLongWrite = false, int timeout = 15, bool useMutex = true}) async {
     //  check args
     if (withoutResponse && allowLongWrite) {
       throw ArgumentError("cannot longWrite withoutResponse, not allowed on iOS or Android");
@@ -167,13 +165,14 @@ class BluetoothCharacteristic {
 
     // check connected
     if (device.isDisconnected) {
-      throw FlutterBluePlusException(
-          ErrorPlatform.fbp, "writeCharacteristic", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
+      throw FlutterBluePlusException(ErrorPlatform.fbp, "writeCharacteristic", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
     }
 
     // Only allow a single ble operation to be underway at a time
     _Mutex mtx = _MutexFactory.getMutexForKey("global");
-    await mtx.take();
+    if (useMutex) {
+      await mtx.take();
+    }
 
     try {
       final writeType = withoutResponse ? BmWriteType.withoutResponse : BmWriteType.withResponse;
@@ -217,7 +216,9 @@ class BluetoothCharacteristic {
 
       return Future.value();
     } finally {
-      mtx.give();
+      if (useMutex) {
+        mtx.give();
+      }
     }
   }
 
@@ -228,8 +229,7 @@ class BluetoothCharacteristic {
   Future<bool> setNotifyValue(bool notify, {int timeout = 15, bool forceIndications = false}) async {
     // check connected
     if (device.isDisconnected) {
-      throw FlutterBluePlusException(
-          ErrorPlatform.fbp, "setNotifyValue", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
+      throw FlutterBluePlusException(ErrorPlatform.fbp, "setNotifyValue", FbpErrorCode.deviceIsDisconnected.index, "device is not connected");
     }
 
     // check
