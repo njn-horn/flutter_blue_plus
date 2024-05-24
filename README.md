@@ -51,7 +51,7 @@ FlutterBluePlus was written to be simple, robust, and easy to understand.
 
 ## No Dependencies
 
-FlutterBluePlus has zero dependencies besides Flutter, Android, and iOS themselves.
+FlutterBluePlus has zero dependencies besides Flutter, Android, iOS, and macOS themselves.
 
 This makes FlutterBluePlus very stable, and easy to maintain.
 
@@ -148,8 +148,8 @@ If your device is not found, see [Common Problems](#common-problems).
 
 ```dart
 // listen to scan results
-// Note: `onScanResults` only returns live scan results, i.e. during scanning
-// Use: `scanResults` if you want live scan results *or* the results from a previous scan
+// Note: `onScanResults` only returns live scan results, i.e. during scanning. Use
+//  `scanResults` if you want live scan results *or* the results from a previous scan.
 var subscription = FlutterBluePlus.onScanResults.listen((results) {
         if (results.isNotEmpty) {
             ScanResult r = results.last; // the most recently found device
@@ -167,13 +167,10 @@ FlutterBluePlus.cancelWhenScanComplete(subscription);
 await FlutterBluePlus.adapterState.where((val) => val == BluetoothAdapterState.on).first;
 
 // Start scanning w/ timeout
-// Optional: you can use `stopScan()` as an alternative to using a timeout
-// Note: scan filters use an *or* behavior. i.e. if you set `withServices` & `withNames`
-//   we return all the advertisments that match any of the specified services *or* any
-//   of the specified names.
+// Optional: use `stopScan()` as an alternative to timeout
 await FlutterBluePlus.startScan(
-  withServices:[Guid("180D")],
-  withNames:["Bluno"],
+  withServices:[Guid("180D")], // match any of the specified services
+  withNames:["Bluno"], // *or* any of the specified names
   timeout: Duration(seconds:15));
 
 // wait for scanning to stop
@@ -194,9 +191,12 @@ var subscription = device.connectionState.listen((BluetoothConnectionState state
 });
 
 // cleanup: cancel subscription when disconnected
-// Note: `delayed:true` lets us receive the `disconnected` event in our handler
-// Note: `next:true` means cancel on *next* disconnection. Without this, it
-//   would cancel immediately because we're already disconnected right now.
+//   - [delayed] This option is only meant for `connectionState` subscriptions.  
+//     When `true`, we cancel after a small delay. This ensures the `connectionState` 
+//     listener receives the `disconnected` event.
+//   - [next] if true, the the stream will be canceled only on the *next* disconnection,
+//     not the current disconnection. This is useful if you setup your subscriptions
+//     before you connect.
 device.cancelWhenDisconnected(subscription, delayed:true, next:true);
 
 // Connect to the device
@@ -542,15 +542,7 @@ In the **ios/Runner/Info.plist** let’s add:
 ```dart
 <dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>This app always needs Bluetooth to function</string>
-    <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>This app needs Bluetooth Peripheral to function</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>This app always needs location and when in use to function</string>
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>This app always needs location to function</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>This app needs location when in use to function</string>
+    <string>This app needs Bluetooth to function</string>
 ```
 
 For location permissions on iOS see more at: [https://developer.apple.com/documentation/corelocation/requesting_authorization_for_location_services](https://developer.apple.com/documentation/corelocation/requesting_authorization_for_location_services)
@@ -600,6 +592,7 @@ You can try using https://pub.dev/packages/flutter_foreground_task or possibly h
 |                        |      Android       |        iOS         | Throws | Description                                                |
 | :--------------------- | :----------------: | :----------------: | :----: | :----------------------------------------------------------|
 | setLogLevel            | :white_check_mark: | :white_check_mark: |        | Configure plugin log level                                 |
+| setOptions             | :white_check_mark: | :white_check_mark: |        | Set configurable bluetooth options                         |
 | isSupported            | :white_check_mark: | :white_check_mark: |        | Checks whether the device supports Bluetooth               |
 | turnOn                 | :white_check_mark: |                    | :fire: | Turns on the bluetooth adapter                             |
 | adapterStateNow     ⚡  | :white_check_mark: | :white_check_mark: |        | Current state of the bluetooth adapter                     |
@@ -794,20 +787,24 @@ subscription.cancel()
 
 ### Scanning does not find my device
 
-**1. try using another ble scanner app**
+**1. you're using an emulator**
+
+Use a physical device.
+
+**2. try using another ble scanner app**
 
 * **iOS**: [nRF Connect](https://apps.apple.com/us/app/nrf-connect-for-mobile/id1054362403)
 * **Android**: [BLE Scanner](https://play.google.com/store/apps/details?id=com.macdom.ble.blescanner)
 
 Install a BLE scanner app on your phone. Can it find your device?
 
-**2. your device uses bluetooth classic, not BLE.**
+**3. your device uses bluetooth classic, not BLE.**
 
 Headphones, speakers, keyboards, mice, gamepads, & printers all use Bluetooth Classic. 
 
 These devices may be found in System Settings, but they cannot be connected to by FlutterBluePlus. FlutterBluePlus only supports Bluetooth Low Energy.
 
-**3. your device stopped advertising.**
+**4. your device stopped advertising.**
 
 - you might need to reboot your device
 - you might need to put your device in "discovery mode"
@@ -828,10 +825,14 @@ for (var d in system) {
 }
 ```
 
-**4. your scan filters are wrong.**
+**5. your scan filters are wrong.**
 
 - try removing all scan filters
 - for `withServices` to work, your device must actively advertise the serviceUUIDs it supports
+
+**6. Android: you're calling startScan too often**
+
+On Adroid you can only call `startScan` 5 times per 30 second period. This is a platform restriction.
 
 ---
 

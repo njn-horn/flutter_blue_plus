@@ -180,7 +180,7 @@ class BmScanResponse {
       advertisements.add(BmScanAdvertisement.fromMap(item));
     }
 
-    bool success = json['success'] == null || json['success'] == 0;
+    bool success = json['success'] == null || json['success'] != 0;
 
     return BmScanResponse(
       advertisements: advertisements,
@@ -705,9 +705,9 @@ class BmMtuChangedResponse {
   BmMtuChangedResponse({
     required this.remoteId,
     required this.mtu,
-    required this.success,
-    required this.errorCode,
-    required this.errorString,
+    this.success = true,
+    this.errorCode = 0,
+    this.errorString = "",
   });
 
   factory BmMtuChangedResponse.fromMap(Map<dynamic, dynamic> json) {
@@ -718,6 +718,16 @@ class BmMtuChangedResponse {
       errorCode: json['error_code'],
       errorString: json['error_string'],
     );
+  }
+
+  Map<dynamic, dynamic> toMap() {
+    final Map<dynamic, dynamic> data = {};
+    data['remote_id'] = remoteId.str;
+    data['mtu'] = mtu;
+    data['success'] = success ? 1 : 0;
+    data['error_code'] = errorCode;
+    data['error_string'] = errorString;
+    return data;
   }
 }
 
@@ -842,3 +852,7 @@ class BmTurnOnResponse {
     );
   }
 }
+
+// random number defined by flutter blue plus.
+// Ideally it should not conflict with iOS or Android error codes.
+int bmUserCanceledErrorCode = 23789258;

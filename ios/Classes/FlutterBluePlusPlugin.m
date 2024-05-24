@@ -53,6 +53,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 @property(nonatomic) NSDictionary *scanFilters;
 @property(nonatomic) NSTimer *checkForMtuChangesTimer;
 @property(nonatomic) LogLevel logLevel;
+@property(nonatomic) NSNumber *showPowerAlert;
 @end
 
 @implementation FlutterBluePlusPlugin
@@ -73,6 +74,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     instance.writeDescs = [NSMutableDictionary new];
     instance.scanCounts = [NSMutableDictionary new];
     instance.logLevel = LDEBUG;
+    instance.showPowerAlert = @(YES);
 
     [registrar addMethodCallDelegate:instance channel:methodChannel];
 }
@@ -102,14 +104,24 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     {
         Log(LDEBUG, @"handleMethodCall: %@", call.method);
 
+        if ([@"setOptions" isEqualToString:call.method])
+        {
+            NSDictionary *args = (NSDictionary*) call.arguments;
+            self.showPowerAlert = args[@"show_power_alert"];
+            result(@YES);
+            return;
+        }
+
         // initialize adapter
         if (self.centralManager == nil)
         {
             Log(LDEBUG, @"initializing CBCentralManager");
 
             NSDictionary *options = @{
-                CBCentralManagerOptionShowPowerAlertKey: @(YES)
+                CBCentralManagerOptionShowPowerAlertKey: self.showPowerAlert
             };
+
+            Log(LDEBUG, @"show power alert: %@", [self.showPowerAlert boolValue] ? @"yes" : @"no");
 
             self.centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:nil options:options];
         }
@@ -127,7 +139,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
         // check that we have an adapter, except for the 
         // functions that don't need it
         if (self.centralManager == nil && 
-            [@"flutterHotRestart" isEqualToString:call.method] == false &&
+            [@"flutterRestart" isEqualToString:call.method] == false &&
             [@"connectedCount" isEqualToString:call.method] == false &&
             [@"setLogLevel" isEqualToString:call.method] == false &&
             [@"isSupported" isEqualToString:call.method] == false &&
@@ -138,7 +150,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
             return;
         }
 
-        if ([@"flutterHotRestart" isEqualToString:call.method])
+        if ([@"flutterRestart" isEqualToString:call.method])
         {
             // no adapter?
             if (self.centralManager == nil) {
@@ -150,7 +162,9 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
                 [self.centralManager stopScan];
             }
 
-            [self disconnectAllDevices:@"flutterHotRestart"];
+            // all dart state is reset after flutter restart
+            // (i.e. Hot Restart) so also reset native state
+            [self disconnectAllDevices:@"flutterRestart"];
 
             Log(LDEBUG, @"connectedPeripherals: %lu", self.connectedPeripherals.count);
 
@@ -924,7 +938,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
             [self.methodChannel invokeMethod:@"OnConnectionStateChanged" arguments:result];
         } 
         
-        if ([func isEqualToString:@"flutterHotRestart"] && [self isAdapterOn]) {
+        if ([func isEqualToString:@"flutterRestart"] && [self isAdapterOn]) {
             // request disconnection
             [self.centralManager cancelPeripheralConnection:peripheral];
         }
@@ -1016,12 +1030,14 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 {
     Log(LDEBUG, @"centralManagerDidUpdateState %@", [self cbManagerStateString:self.centralManager.state]);
 
-    // was the adapter turned off?
-    if (self.centralManager.state != CBManagerStatePoweredOn) {
-        [self disconnectAllDevices:@"adapterTurnOff"];
-    }
-
     int adapterState = [self bmAdapterStateEnum:self.centralManager.state];
+
+    // stop scanning when adapter is turned off. 
+    // Otherwise, scanning automatically resumes when the adapter is
+    // turned back on. I don't think most users expect that.
+    if (self.centralManager.state != CBManagerStatePoweredOn) {
+        [self.centralManager stopScan];
+    }
 
     // See BmBluetoothAdapterState
     NSDictionary* response = @{
@@ -1029,6 +1045,11 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     };
 
     [self.methodChannel invokeMethod:@"OnAdapterStateChanged" arguments:response];
+
+    // disconnect all devices
+    if (self.centralManager.state != CBManagerStatePoweredOn) {
+        [self disconnectAllDevices:@"adapterTurnOff"];
+    }
 }
 
 - (void)centralManager:(CBCentralManager *)central
@@ -1174,11 +1195,14 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     // Unregister self as delegate for peripheral, not working #42
     peripheral.delegate = nil;
 
+    // random number defined by flutter blue plus
+    int bmUserCanceledErrorCode = 23789258;
+
     // See BmConnectionStateResponse
     NSDictionary *result = @{
         @"remote_id":                remoteId,
         @"connection_state":         @([self bmConnectionStateEnum:peripheral.state]),
-        @"disconnect_reason_code":   error ? @(error.code) : @(23789258),
+        @"disconnect_reason_code":   error ? @(error.code) : @(bmUserCanceledErrorCode),
         @"disconnect_reason_string": error ? [error localizedDescription] : @("connection canceled"),
     };
 

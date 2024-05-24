@@ -99,6 +99,17 @@ class FlutterBluePlus {
   /// Get access to all device event streams
   static final BluetoothEvents events = BluetoothEvents();
 
+  /// Set configurable options
+  ///   - [showPowerAlert] Whether to show the power alert (iOS & MacOS only). i.e. CBCentralManagerOptionShowPowerAlertKey
+  ///       To set this option you must call this method before any other method in this package.
+  ///       See: https://developer.apple.com/documentation/corebluetooth/cbcentralmanageroptionshowpoweralertkey
+  ///       This option has no effect on Android.
+  static Future<void> setOptions({
+    bool showPowerAlert = true,
+  }) async {
+    await _invokeMethod('setOptions', {"show_power_alert": showPowerAlert});
+  }
+
   /// Turn on Bluetooth (Android only),
   static Future<void> turnOn({int timeout = 60}) async {
     var responseStream = FlutterBluePlus._methodStream.stream
@@ -229,7 +240,8 @@ class FlutterBluePlus {
         withServiceData.isNotEmpty;
 
     // Note: `withKeywords` is not compatible with other filters on android
-    // because it is implemented in custom fbp code, not android code
+    // because it is implemented in custom fbp code, not android code, and the
+    // android 'name' filter is only available as of android sdk 33 (August 2022)
     assert(!(Platform.isAndroid && withKeywords.isNotEmpty && hasOtherFilter),
         "withKeywords is not compatible with other filters on Android");
 
@@ -242,10 +254,10 @@ class FlutterBluePlus {
       if (_isScanning.latestValue == true) {
         // stop existing scan
         await _stopScan();
-      } else {
-        // push to stream
-        _isScanning.add(true);
       }
+
+      // push to stream
+      _isScanning.add(true);
 
       var settings = BmScanSettings(
           withServices: withServices,
@@ -336,12 +348,19 @@ class FlutterBluePlus {
     }
   }
 
-  /// Stops a scan for Bluetooth Low Energy devices
+  /// Stops a scan for Bluetooth Low Energy devices 
   static Future<void> stopScan() async {
     _Mutex mtx = _MutexFactory.getMutexForKey("scan");
     await mtx.take();
-    await _stopScan();
-    mtx.give();
+    try {
+      if(isScanningNow) {
+        await _stopScan();
+      } else if (_logLevel.index >= LogLevel.info.index) {
+        print("[FBP] stopScan: already stopped");
+      }
+    } finally {
+      mtx.give();
+    }
   }
 
   /// for internal use
@@ -359,7 +378,7 @@ class FlutterBluePlus {
   }
 
   /// Register a subscription to be canceled when scanning is complete.
-  /// This function simplifies cleanup, to prevent creating duplicate stream subscriptions.
+  /// This function simplifies cleanup, so you can prevent creating duplicate stream subscriptions.
   ///   - this is an optional convenience function
   ///   - prevents accidentally creating duplicate subscriptions before each scan
   static void cancelWhenScanComplete(StreamSubscription subscription) {
@@ -367,7 +386,7 @@ class FlutterBluePlus {
   }
 
   /// Sets the internal FlutterBlue log level
-  static void setLogLevel(LogLevel level, {color = true}) async {
+  static Future<void> setLogLevel(LogLevel level, {color = true}) async {
     _logLevel = level;
     _logColor = color;
     await _invokeMethod('setLogLevel', level.index);
@@ -394,8 +413,8 @@ class FlutterBluePlus {
     // set platform method handler
     _methodChannel.setMethodCallHandler(_methodCallHandler);
 
-    // hot restart
-    if ((await _methodChannel.invokeMethod('flutterHotRestart')) != 0) {
+    // flutter restart - wait for all devices to disconnect
+    if ((await _methodChannel.invokeMethod('flutterRestart')) != 0) {
       await Future.delayed(Duration(milliseconds: 50));
       while ((await _methodChannel.invokeMethod('connectedCount')) != 0) {
         await Future.delayed(Duration(milliseconds: 50));
@@ -427,7 +446,11 @@ class FlutterBluePlus {
       }
       if (r.adapterState == BmAdapterStateEnum.on) {
         for (DeviceIdentifier d in _autoConnect) {
-          BluetoothDevice(remoteId: d).connect(autoConnect: true, mtu: null);
+          BluetoothDevice(remoteId: d).connect(autoConnect: true, mtu: null).onError((e, s) {
+            if (logLevel != LogLevel.none) {
+              print("[FBP] [AutoConnect] connection failed: $e");
+            }
+          });
         }
       }
     }
@@ -437,28 +460,40 @@ class FlutterBluePlus {
       var r = BmConnectionStateResponse.fromMap(call.arguments);
       _connectionStates[r.remoteId] = r;
       if (r.connectionState == BmConnectionStateEnum.disconnected) {
+        // push to mtu stream, if needed
+        if (_mtuValues.containsKey(r.remoteId)) {
+          var resp = BmMtuChangedResponse(remoteId: r.remoteId, mtu: 23);
+          _methodStream.add(MethodCall("OnMtuChanged", resp.toMap()));
+        }
+
         // clear mtu
         _mtuValues.remove(r.remoteId);
 
         // clear lastDescs (resets 'isNotifying')
-        _lastDescs.remove(r.remoteId); 
+        _lastDescs.remove(r.remoteId);
 
         // clear lastChrs (api consistency)
-        _lastChrs.remove(r.remoteId); 
+        _lastChrs.remove(r.remoteId);
 
         // cancel & delete subscriptions
-        _deviceSubscriptions[r.remoteId]?.forEach((s) => s.cancel()); 
-        _deviceSubscriptions.remove(r.remoteId); 
+        _deviceSubscriptions[r.remoteId]?.forEach((s) => s.cancel());
+        _deviceSubscriptions.remove(r.remoteId);
 
         // Note: to make FBP easier to use, we do not clear `knownServices`,
-        // otherwise `servicesList` would be more annoying to use. We also 
+        // otherwise `servicesList` would be more annoying to use. We also
         // do not clear `bondState`, for faster performance.
 
         // autoconnect
-        if (_adapterStateNow == BmAdapterStateEnum.on) {
-          var device = BluetoothDevice(remoteId: r.remoteId);
-          if (_autoConnect.contains(device)) {
-            device.connect(autoConnect: true, mtu: null);
+        if (Platform.isAndroid == false) {
+          if (_autoConnect.contains(r.remoteId)) {
+            if (_adapterStateNow == BmAdapterStateEnum.on) {
+              var d = BluetoothDevice(remoteId: r.remoteId);
+              d.connect(autoConnect: true, mtu: null).onError((e, s) {
+                if (logLevel != LogLevel.none) {
+                  print("[FBP] [AutoConnect] connection failed: $e");
+                }
+              });
+            }
           }
         }
       }
@@ -538,17 +573,22 @@ class FlutterBluePlus {
   }
 
   /// invoke a platform method
-  static Future<dynamic> _invokeMethod(String method, [dynamic arguments]) async {
+  static Future<dynamic> _invokeMethod(
+    String method, [
+    dynamic arguments,
+  ]) async {
     // return value
     dynamic out;
 
-    // only allow 1 invocation at a time (guarentees that hot restart finishes)
+    // only allow 1 invocation at a time (guarantees that hot restart finishes)
     _Mutex mtx = _MutexFactory.getMutexForKey("invokeMethod");
     await mtx.take();
 
     try {
       // initialize
-      _initFlutterBluePlus();
+      if (method != "setOptions") {
+        _initFlutterBluePlus();
+      }
 
       // log args
       if (logLevel == LogLevel.verbose) {
